@@ -3,35 +3,54 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/BurntSushi/toml"
+	ses "github.com/tamcgoey/go-ses"
 	"io/ioutil"
 	"net/mail"
 	"os"
-	"stathat.com/c/amzses"
 )
 
-type Config struct {
-	Sender       string
-	ExtractTo    bool
-	Allow_period bool
-	Debug        bool
-	Version      bool
+type CliConfig struct {
+	Sender      string
+	ExtractTo   bool
+	AllowPeriod bool
+	Debug       bool
+	Version     bool
+	Config      string
 }
 
-var config Config
+type TOMLConfig struct {
+	AccessKey string
+	SecretKey string
+	Region    string
+}
+
+func (t *TOMLConfig) Endpoint() string {
+	return fmt.Sprintf("https://email.%s.amazonaws.com", t.Region)
+}
+
+var config CliConfig
 
 func init() {
 	flag.StringVar(&config.Sender, "f", "", "Set the FROM address")
+	flag.StringVar(&config.Config, "config", "/etc/sesmail/sesmail.toml", "Change the config file")
 	flag.BoolVar(&config.ExtractTo, "t", false, "Extract the recipients from the body headers")
 	flag.BoolVar(&config.Debug, "debug", false, "Print too much output")
-	flag.BoolVar(&config.Allow_period, "i", true, "Allow a single period on a line by itself without terminating output (IGNORED)")
+	flag.BoolVar(&config.AllowPeriod, "i", true, "Allow a single period on a line by itself without terminating output (IGNORED)")
 	flag.BoolVar(&config.Version, "version", false, "Print version and exit")
 	flag.Parse()
 }
 
 func main() {
-	version := "0.1.0"
+	version := "0.2.0"
 	var to string
 	var sender string
+
+	var tomlConfig TOMLConfig
+	if _, err := toml.DecodeFile(config.Config, &tomlConfig); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
 	if config.Version == true {
 		fmt.Println(version)
@@ -59,8 +78,10 @@ func main() {
 	}
 
 	subject := m.Header.Get("Subject")
-	fmt.Printf("%+v\n", config)
-	fmt.Printf("%+v\n", m.Header)
+	reply_to := m.Header.Get("Reply-To")
+	if reply_to == "" {
+		reply_to = sender
+	}
 
 	switch {
 	case to == "":
@@ -74,8 +95,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Sending message")
-	fmt.Printf("sender='%s',to='%s',subject='%s'\n", sender, to, subject)
-
-	amzses.SendMail(sender, to, subject, string(body))
+	s := ses.Config{
+		Endpoint:        tomlConfig.Endpoint(),
+		AccessKeyID:     tomlConfig.AccessKey,
+		SecretAccessKey: tomlConfig.SecretKey,
+	}
+	s.SendEmail(sender, reply_to, to, subject, string(body))
 }
