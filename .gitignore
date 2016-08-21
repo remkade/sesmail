@@ -26,3 +26,4 @@ _testmain.go
 sesmail
 *.deb
 *.toml
+.*.swp

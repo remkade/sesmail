@@ -4,8 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
+	log "github.com/Sirupsen/logrus"
+	logrus_syslog "github.com/Sirupsen/logrus/hooks/syslog"
 	ses "github.com/tamcgoey/go-ses"
 	"io/ioutil"
+	"log/syslog"
 	"net/mail"
 	"os"
 )
@@ -15,6 +18,7 @@ type CliConfig struct {
 	ExtractTo   bool
 	AllowPeriod bool
 	Debug       bool
+	Syslog      bool
 	Version     bool
 	Config      string
 }
@@ -37,30 +41,39 @@ func init() {
 	flag.BoolVar(&config.ExtractTo, "t", false, "Extract the recipients from the body headers")
 	flag.BoolVar(&config.Debug, "debug", false, "Print too much output")
 	flag.BoolVar(&config.AllowPeriod, "i", true, "Allow a single period on a line by itself without terminating output (IGNORED)")
+	flag.BoolVar(&config.Syslog, "syslog", false, "Log to syslog")
 	flag.BoolVar(&config.Version, "version", false, "Print version and exit")
 	flag.Parse()
 }
 
 func main() {
-	version := "0.2.0"
+	version := "0.3.0"
+	codename := "Melted Chihuahas"
 	var to string
 	var sender string
 
+	if config.Syslog {
+		hook, err := logrus_syslog.NewSyslogHook("", "", syslog.LOG_LOCAL0, "sesmail")
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.AddHook(hook)
+		log.SetFormatter(&log.TextFormatter{})
+	}
+
 	var tomlConfig TOMLConfig
 	if _, err := toml.DecodeFile(config.Config, &tomlConfig); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
 	if config.Version == true {
-		fmt.Println(version)
+		fmt.Printf("sesmail %s, '%s'", version, codename)
 		os.Exit(0)
 	}
 
 	m, err := mail.ReadMessage(os.Stdin)
 	if err != nil {
-		fmt.Printf("Error reading from stdin '%s'\n", err)
-		os.Exit(1)
+		log.Fatalf("Error reading from stdin '%s'\n", err)
 	}
 
 	to = m.Header.Get("To")
@@ -73,8 +86,7 @@ func main() {
 
 	body, err := ioutil.ReadAll(m.Body)
 	if err != nil {
-		fmt.Printf("Error Reading message body: '%s'", err)
-		os.Exit(1)
+		log.Fatalf("Error Reading message body: '%s'", err)
 	}
 
 	subject := m.Header.Get("Subject")
@@ -85,14 +97,11 @@ func main() {
 
 	switch {
 	case to == "":
-		fmt.Printf("To is empty!\n")
-		os.Exit(1)
+		log.Fatal("To is empty!")
 	case sender == "":
-		fmt.Printf("sender is empty!\n")
-		os.Exit(1)
+		log.Fatal("sender is empty!")
 	case subject == "":
-		fmt.Printf("Subject is empty!\n")
-		os.Exit(1)
+		log.Fatal("Subject is empty!")
 	}
 
 	s := ses.Config{
@@ -100,5 +109,20 @@ func main() {
 		AccessKeyID:     tomlConfig.AccessKey,
 		SecretAccessKey: tomlConfig.SecretKey,
 	}
-	s.SendEmail(sender, reply_to, to, subject, string(body))
+	_, err = s.SendEmail(sender, reply_to, to, subject, string(body))
+	if err != nil {
+		log.WithFields(log.Fields{
+			"to":       to,
+			"sender":   sender,
+			"reply_to": reply_to,
+			"subject":  subject,
+		}).Fatalf("Error Sending Email: '%s'", err)
+	} else {
+		log.WithFields(log.Fields{
+			"to":       to,
+			"sender":   sender,
+			"reply_to": reply_to,
+			"subject":  subject,
+		}).Info("Message sent successfully")
+	}
 }
